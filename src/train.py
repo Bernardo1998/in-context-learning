@@ -83,6 +83,7 @@ def train(model, args):
         )
         task = task_sampler(**task_sampler_args)
         ys = task.evaluate(xs)
+        #print("xs/ys shape in train.py:", xs.shape, ys.shape)
 
         loss_func = task.get_training_metric()
 

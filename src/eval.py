@@ -55,7 +55,7 @@ def eval_batch(model, task_sampler, xs, xs_p=None):
         for i in range(n_points):
             xs_comb = torch.cat((xs[:, :i, :], xs_p[:, i:, :]), dim=1)
             ys = task.evaluate(xs_comb)
-
+ 
             pred = model(xs_comb.to(device), ys.to(device), inds=[i]).detach()
             metrics[:, i] = task.get_metric()(pred.cpu(), ys)[:, i]
 
