@@ -1,5 +1,5 @@
 inherit: 
-    - models/standard.yaml
+    - models/tiny.yaml
     - wandb.yaml
 
 model:
@@ -10,11 +10,11 @@ training:
     task: linear_regression
     data: gaussian
     task_kwargs: {}
-    batch_size: 64
+    batch_size: 256
     learning_rate: 0.0001
     save_every_steps: 1000
     keep_every_steps: 100000
-    train_steps: 5001
+    train_steps: 500001
     curriculum:
         dims:
             start: 5

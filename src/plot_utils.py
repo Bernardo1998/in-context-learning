@@ -12,6 +12,18 @@ palette = sns.color_palette("colorblind")
 
 relevant_model_names = {
     "linear_regression": [
+        "Transformer-xs",
+        "Least Squares",
+        "3-Nearest Neighbors",
+        "Averaging",
+    ],
+    "noisy_linear_regression": [
+        "Transformer",
+        "Least Squares",
+        "3-Nearest Neighbors",
+        "Averaging",
+    ],
+    "quadratic_regression": [
         "Transformer",
         "Least Squares",
         "3-Nearest Neighbors",
@@ -50,6 +62,7 @@ def basic_plot(metrics, models=None, trivial=1.0):
     ax.axhline(trivial, ls="--", color="gray")
     for name, vs in metrics.items():
         ax.plot(vs["mean"], "-", label=name, color=palette[color % 10], lw=2)
+        # print(vs)
         low = vs["bootstrap_low"]
         high = vs["bootstrap_high"]
         ax.fill_between(range(len(low)), low, high, alpha=0.3)
@@ -57,17 +70,17 @@ def basic_plot(metrics, models=None, trivial=1.0):
     ax.set_xlabel("in-context examples")
     ax.set_ylabel("squared error")
     ax.set_xlim(-1, len(low) + 0.1)
-    ax.set_ylim(-0.1, 1.25)
+    ax.set_ylim(-0.1, 2)
 
     legend = ax.legend(loc="upper left", bbox_to_anchor=(1, 1))
     fig.set_size_inches(4, 3)
-    for line in legend.get_lines():
-        line.set_linewidth(3)
+    # for line in legend.get_lines():
+        # line.set_linewidth(3)
 
     return fig, ax
 
 
-def collect_results(run_dir, df, valid_row=None, rename_eval=None, rename_model=None):
+def collect_results(run_dir, df, valid_row=None, rename_eval=None, rename_model=None, step=-1):
     all_metrics = {}
     for _, r in df.iterrows():
         if valid_row is not None and not valid_row(r):
@@ -77,7 +90,7 @@ def collect_results(run_dir, df, valid_row=None, rename_eval=None, rename_model=
         _, conf = get_model_from_run(run_path, only_conf=True)
 
         print(r.run_name, r.run_id)
-        metrics = get_run_metrics(run_path, skip_model_load=True)
+        metrics = get_run_metrics(run_path, skip_model_load=True,step=step)
 
         for eval_name, results in sorted(metrics.items()):
             processed_results = {}
@@ -91,7 +104,7 @@ def collect_results(run_dir, df, valid_row=None, rename_eval=None, rename_model=
                 m_processed = {}
                 n_dims = conf.model.n_dims
 
-                xlim = 2 * n_dims + 1
+                xlim = 6 * n_dims + 1
                 if r.task in ["relu_2nn_regression", "decision_tree"]:
                     xlim = 200
 

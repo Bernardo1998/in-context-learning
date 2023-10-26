@@ -1,18 +1,28 @@
 import math
-
+import numpy as np
 import torch
 
 
 def squared_error(ys_pred, ys):
+    n = ys.shape[1]
+    # print(ys[:10,-1])
+    # print(ys_pred[:10,-1])
+    # print([((ys[:,i].detach().cpu()-ys_pred[i]))**2 for i in range(n) ])
+    # return np.array([(((ys[:,i].detach().cpu()-ys_pred[i]))**2).numpy() for i in range(n) ])#
     return (ys - ys_pred).square()
 
 
 def mean_squared_error(ys_pred, ys):
-    return (ys - ys_pred).square().mean()
-
+    n = ys.shape[1]
+    # print((ys - ys_pred).square().mean(dim=0))
+    # print((ys - ys_pred)[:,:].square().mean())
+    # print(ys.shape)
+    # return sum([(ys[:,i]-ys_pred[i])**2 for i in range(n) ])
+    return (ys - ys_pred)[:,:].square().mean()
 
 def accuracy(ys_pred, ys):
-    return (ys == ys_pred.sign()).float()
+    n = ys.shape[1]
+    return sum([(ys[:,i]-ys_pred[i])**2 for i in range(n) ])
 
 
 sigmoid = torch.nn.Sigmoid()
@@ -94,8 +104,17 @@ class LinearRegression(Task):
             self.w_b = pool_dict["w"][indices]
 
     def evaluate(self, xs_b):
+        # print(xs_b.shape)
         w_b = self.w_b.to(xs_b.device)
-        ys_b = self.scale * (xs_b @ w_b)[:, :, 0]
+        # print((xs_b @ w_b).shape)
+        ys_b0 = self.scale * (xs_b @ w_b)[:, :, 0]
+        return ys_b0
+
+        ys_b = ys_b0*0
+        n_points = ys_b0.shape[1]
+        for i in range(n_points-1):
+            ys_b[:,i+1] = ys_b0[:,i]/2+ys_b0[:,i+1]/2
+        # ys_b = ys_b + torch.randn_like(ys_b) * 1
         return ys_b
 
     @staticmethod

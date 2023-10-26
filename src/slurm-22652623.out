@@ -1,0 +1,68 @@
+lac-344
+/opt/software/Python/3.6.4-foss-2018a/lib/python3.6/site-packages/sklearn/externals/joblib/externals/cloudpickle/cloudpickle.py:47: DeprecationWarning: the imp module is deprecated in favour of importlib; see the module's documentation for alternative uses
+  import imp
+/opt/software/Python/3.6.4-foss-2018a/lib/python3.6/site-packages/pkg_resources/__init__.py:119: PkgResourcesDeprecationWarning: R2019b is an invalid version and will not be supported in a future release
+  PkgResourcesDeprecationWarning,
+/opt/software/Python/3.6.4-foss-2018a/lib/python3.6/site-packages/pkg_resources/__init__.py:119: PkgResourcesDeprecationWarning: R2018a is an invalid version and will not be supported in a future release
+  PkgResourcesDeprecationWarning,
+Running with: Quinfig
+-------
+config: conf/linear_regression.yaml
+inherit:
+- /mnt/ufs18/home-077/xingyue1/tmp1/in-context-learning/src/conf/wandb.yaml
+model:
+  family: gpt2_no_encoding
+  n_dims: 5
+  n_embd: 64
+  n_head: 8
+  n_layer: 1
+  n_positions: 101
+out_dir: ../models/linear_regression
+test_run: false
+training:
+  batch_size: 128
+  curriculum:
+    dims:
+      end: 20
+      inc: 1
+      interval: 2000
+      start: 5
+    points:
+      end: 31
+      inc: 2
+      interval: 2000
+      start: 11
+  data: gaussian
+  keep_every_steps: 10000
+  learning_rate: 0.0001
+  num_tasks: null
+  num_training_examples: null
+  resume_id: null
+  save_every_steps: 10000
+  task: linear_regression
+  task_kwargs: {}
+  train_steps: 50001
+wandb:
+  entity: your-entity
+  log_every_steps: 100
+  name: linear_regression_standard
+  notes: ''
+  project: in-context-training
+
+wandb: ERROR api_key not configured (no-tty). call wandb.login(key=[your_api_key])
+Traceback (most recent call last):
+  File "train.py", line 194, in <module>
+    main(args)
+  File "train.py", line 161, in main
+    resume=True,
+  File "/mnt/home/xingyue1/.local/lib/python3.6/site-packages/wandb/sdk/wandb_init.py", line 1184, in init
+    raise e
+  File "/mnt/home/xingyue1/.local/lib/python3.6/site-packages/wandb/sdk/wandb_init.py", line 1161, in init
+    wi.setup(kwargs)
+  File "/mnt/home/xingyue1/.local/lib/python3.6/site-packages/wandb/sdk/wandb_init.py", line 311, in setup
+    _entity=kwargs.get("entity") or settings.entity,
+  File "/mnt/home/xingyue1/.local/lib/python3.6/site-packages/wandb/sdk/wandb_login.py", line 298, in _login
+    wlogin.prompt_api_key()
+  File "/mnt/home/xingyue1/.local/lib/python3.6/site-packages/wandb/sdk/wandb_login.py", line 228, in prompt_api_key
+    raise UsageError("api_key not configured (no-tty). call " + directive)
+wandb.errors.UsageError: api_key not configured (no-tty). call wandb.login(key=[your_api_key])

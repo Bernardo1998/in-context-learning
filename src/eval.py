@@ -47,16 +47,27 @@ def eval_batch(model, task_sampler, xs, xs_p=None):
 
     if xs_p is None:
         ys = task.evaluate(xs)
-        pred = model(xs.to(device), ys.to(device)).detach()
-        metrics = task.get_metric()(pred.cpu(), ys)
+        # print('finish ys')
+        pred = model(xs.to(device), ys.to(device))
+        if len(pred) == 2:
+            pred = pred[0]
+
+        pred = np.array([i.detach().cpu().numpy() for i in pred])
+        # pred = pred.detach()
+        # print('finish pred')
+        metrics = task.get_metric()(torch.tensor(pred), ys)
+        # print(metrics.shape)
     else:
         b_size, n_points, _ = xs.shape
         metrics = torch.zeros(b_size, n_points)
         for i in range(n_points):
             xs_comb = torch.cat((xs[:, :i, :], xs_p[:, i:, :]), dim=1)
             ys = task.evaluate(xs_comb)
- 
-            pred = model(xs_comb.to(device), ys.to(device), inds=[i]).detach()
+
+            pred = model(xs_comb.to(device), ys.to(device), inds=[i])
+            if len(pred) == 2:
+                pred = pred[0]
+            pred.detach()
             metrics[:, i] = task.get_metric()(pred.cpu(), ys)[:, i]
 
     return metrics
@@ -137,7 +148,10 @@ def aggregate_metrics(metrics, bootstrap_trials=1000):
     per-point mean, stddev, and bootstrap limits
     """
     results = {}
+    # print(metrics.shape)
     results["mean"] = metrics.mean(dim=0)
+    print(metrics.shape)
+    print(metrics.mean(dim=0))
     results["std"] = metrics.std(dim=0, unbiased=True)
     n = len(metrics)
     bootstrap_indices = torch.randint(n, size=(bootstrap_trials, n))
@@ -168,8 +182,9 @@ def eval_model(
        - num_eval_examples: total number of examples to evaluate on
        - **sampler_kwargs: remaining arguments to pass directly to the sampler
     """
-
+    print(task_name)
     assert num_eval_examples % batch_size == 0
+    data_sampler_kwargs['order'] = True
     data_sampler = get_data_sampler(data_name, n_dims, **data_sampler_kwargs)
     task_sampler = get_task_sampler(
         task_name, n_dims, batch_size, **task_sampler_kwargs
@@ -180,8 +195,8 @@ def eval_model(
     generating_func = globals()[f"gen_{prompting_strategy}"]
     for i in range(num_eval_examples // batch_size):
         xs, xs_p = generating_func(data_sampler, n_points, batch_size)
-
-        metrics = eval_batch(model, task_sampler, xs, xs_p)
+        # print(i,xs,xs_p)
+        metrics = torch.tensor(eval_batch(model, task_sampler, xs, xs_p))
         all_metrics.append(metrics)
 
     metrics = torch.cat(all_metrics, dim=0)
@@ -209,7 +224,8 @@ def build_evals(conf):
     evaluation_kwargs = {}
 
     evaluation_kwargs["standard"] = {"prompting_strategy": "standard"}
-    if task_name != "linear_regression":
+    # if task_name != "linear_regression":
+    if True:
         if task_name in ["relu_2nn_regression"]:
             evaluation_kwargs["linear_regression"] = {"task_name": "linear_regression"}
         for name, kwargs in evaluation_kwargs.items():
@@ -264,19 +280,23 @@ def build_evals(conf):
 
 def compute_evals(all_models, evaluation_kwargs, save_path=None, recompute=False):
     try:
-        with open(save_path) as fp:
+        with open(save_path,'r') as fp:
+            # print(save_path)
             all_metrics = json.load(fp)
+            # print(all_metrics)
     except Exception:
+        # print(123)
         all_metrics = {}
 
     for eval_name, kwargs in tqdm(evaluation_kwargs.items()):
-        metrics = {}
-        if eval_name in all_metrics and not recompute:
-            metrics = all_metrics[eval_name]
-        for model in all_models:
-            if model.name in metrics and not recompute:
-                continue
 
+        metrics = {}
+        if eval_name in all_metrics:
+            metrics = all_metrics[eval_name]
+            
+        for model in all_models:
+            if model.name in metrics :
+                continue
             metrics[model.name] = eval_model(model, **kwargs)
         all_metrics[eval_name] = metrics
 
@@ -300,6 +320,7 @@ def get_run_metrics(
         if not skip_baselines:
             all_models += models.get_relevant_baselines(conf.training.task)
     evaluation_kwargs = build_evals(conf)
+    # print(evaluation_kwargs)
 
     if not cache:
         save_path = None
@@ -323,7 +344,13 @@ def get_run_metrics(
 def conf_to_model_name(conf):
     if conf.model.family == "gpt2":
         return {
+            (1, 1): "Transformer-xs",
             (3, 2): "Transformer-xs",
+            (1, 8): "Transformer-xs",
+            (1, 12): "Transformer-xs",
+            (1, 16): "Transformer-xs",
+            (1, 4): "Transformer-xs",
+            (1, 64): "Transformer-xs",
             (6, 4): "Transformer-small",
             (12, 8): "Transformer",
         }[(conf.model.n_layer, conf.model.n_head)]
@@ -334,6 +361,8 @@ def conf_to_model_name(conf):
 def baseline_names(name):
     if "OLS" in name:
         return "Least Squares"
+    if "Quadratic" in name:
+        return "Quadratic Regression"
     if name == "averaging":
         return "Averaging"
     if "NN" in name:
@@ -386,7 +415,8 @@ def read_run_dir(run_dir):
                 all_runs[k].append(v)
 
     df = pd.DataFrame(all_runs).sort_values("run_name")
-    assert len(df) == len(df.run_name.unique())
+    # print(df)
+    # assert len(df) == len(df.run_name.unique())
     return df
 
 if __name__ == "__main__":

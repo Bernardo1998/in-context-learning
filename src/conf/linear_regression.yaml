@@ -1,14 +1,35 @@
 inherit: 
-    - base.yaml
+    - wandb.yaml
+
+model:
+    n_dims: 5
+    n_positions: 101
+    family: gpt2_no_position
+    n_embd: 64
+    n_layer: 2
+    n_head: 1
+    masking: true
 
 training:
+    data: gaussian
+    task_kwargs: {}
+    batch_size: 128
+    learning_rate: 0.0001
+    save_every_steps: 10000
+    keep_every_steps: 10000
+    train_steps: 50001
     task: linear_regression
     curriculum:
+        dims:
+            start: 5
+            end: 10
+            inc: 1
+            interval: 1000
         points:
-            start: 11
+            start: 21
             end: 41
             inc: 2
-            interval: 2000
+            interval: 1000
 
 out_dir: ../models/linear_regression
 
