@@ -14,7 +14,7 @@ from funcy import merge
 
 
 model_schema = {
-    "family": merge(tstring, allowed(["gpt2", "lstm","gpt2_no_encoding", "gpt2_position", "gpt2_no_position"])),
+    "family": merge(tstring, allowed(["gpt2", "lstm","gpt2_no_encoding", "gpt2_position", "gpt2_no_position", "gpt2_no_position_fix1st"])),
     "n_positions": merge(tinteger, required),  # maximum context length
     "n_dims": merge(tinteger, required),  # latent dimension
     "n_embd": merge(tinteger, required),
@@ -48,7 +48,7 @@ training_schema = {
     "task_kwargs": merge(tdict, required),
     "num_tasks": merge(tinteger, nullable, default(None)),
     "num_training_examples": merge(tinteger, nullable, default(None)),
-    "data": merge(tstring, allowed(["gaussian"])),
+    "data": merge(tstring, allowed(["gaussian", "gaussian_correlated"])),
     "batch_size": merge(tinteger, default(64)),
     "learning_rate": merge(tfloat, default(3e-4)),
     "train_steps": merge(tinteger, default(1000)),

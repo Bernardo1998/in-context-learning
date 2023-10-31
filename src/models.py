@@ -47,6 +47,16 @@ def build_model(conf):
             n_head=conf.n_head,
             masking=conf.masking
         )
+    elif conf.family == "gpt2_no_position_fix1st": # mask - pos # E``
+        model = TransformerModel_no_position(
+            n_dims=conf.n_dims,
+            n_positions=conf.n_positions,
+            n_embd=conf.n_embd,
+            n_layer=conf.n_layer,
+            n_head=conf.n_head,
+            masking=conf.masking,
+            fix_layer1=True
+        )
     else:
         raise NotImplementedError
 
@@ -275,7 +285,7 @@ class TransformerModel_no_encoding(nn.Module):
         return prediction.view((d,-1)).t()[:, inds], attentions  # predict only on xs
 
 class TransformerModel_position(nn.Module):
-    def __init__(self, n_dims, n_positions, n_embd=128, n_layer=12, n_head=4, masking=True):
+    def __init__(self, n_dims, n_positions, n_embd=128, n_layer=12, n_head=4, n_ctx=1024,masking=True):
         super(TransformerModel_position, self).__init__()
         configuration = GPT2Config(
             n_positions=2 * n_positions,
@@ -286,6 +296,7 @@ class TransformerModel_position(nn.Module):
             embd_pdrop=0.0,
             attn_pdrop=0.0,
             use_cache=False,
+            output_attentions=True
         )
         self.name = f"gpt2_embd={n_embd}_layer={n_layer}_head={n_head}"
 
@@ -294,6 +305,11 @@ class TransformerModel_position(nn.Module):
         self._read_in = nn.Linear(n_dims, n_embd)
         self._backbone = GPT2Model(configuration)
         self._read_out = nn.Linear(n_embd, 1)
+
+        self.masking = masking
+        # Drop causal masking in attention modules
+        if not self.masking:
+            self._backbone.h = nn.ModuleList([BlockNoMask(configuration, scale=True) for _ in range(configuration.n_layer)])
 
     @staticmethod
     def _combine(xs_b, ys_b):
@@ -319,12 +335,13 @@ class TransformerModel_position(nn.Module):
                 raise ValueError("inds contain indices where xs and ys are not defined")
         zs = self._combine(xs, ys)
         embeds = self._read_in(zs)
-        output = self._backbone(inputs_embeds=embeds).last_hidden_state
-        prediction = self._read_out(output)
-        return prediction[:, ::2, 0][:, inds]  # predict only on xs
+        output = self._backbone(inputs_embeds=embeds)
+        attentions = output.attentions
+        prediction = self._read_out(output.last_hidden_state)
+        return prediction[:, ::2, 0][:, inds], attentions  # predict only on xs
     
 class TransformerModel_no_position(nn.Module):
-    def __init__(self, n_dims, n_positions, n_embd=128, n_layer=12, n_head=4, n_ctx=1024,masking=True):
+    def __init__(self, n_dims, n_positions, n_embd=128, n_layer=12, n_head=4, n_ctx=1024,masking=True,fix_layer1=False):
         super(TransformerModel_no_position, self).__init__()
         configuration = GPT2Config(
             n_positions=2 * n_positions,
@@ -352,6 +369,13 @@ class TransformerModel_no_position(nn.Module):
         # kick off position encoding
         del self._backbone.wpe
         self._backbone.wpe = lambda x: 0 
+
+        # Fix the first layer
+        if fix_layer1:
+            for i, block in enumerate(self._backbone.h):
+                if i == 0:
+                    for param in block.parameters():
+                        param.requires_grad = False
 
     @staticmethod
     def _combine(xs_b, ys_b):
