@@ -9,52 +9,79 @@ from sklearn import tree
 import xgboost as xgb
 
 from base_models import NeuralNetwork, ParallelNetworks
-
+from AttentionNoMask import BlockNoMask
 
 def build_model(conf):
-    if conf.family == "gpt2_pe":
-        model = TransformerModel_pe(
+    if conf.family == "gpt2": # mask + pos # E
+        model = TransformerModel(
             n_dims=conf.n_dims,
             n_positions=conf.n_positions,
             n_embd=conf.n_embd,
             n_layer=conf.n_layer,
             n_head=conf.n_head,
         )
-    elif conf.family == "gpt2_new_pe":
-        model = TransformerModel_new_pe(
+    elif conf.family == "gpt2_no_encoding": # mask # - pos, E
+        model = TransformerModel_no_encoding(
             n_dims=conf.n_dims,
             n_positions=conf.n_positions,
             n_embd=conf.n_embd,
             n_layer=conf.n_layer,
             n_head=conf.n_head,
+            masking=conf.masking
         )
-    elif conf.family == "gpt2_no_pe":
-        model = TransformerModel_no_pe(
+    elif conf.family == "gpt2_position":# mask + pos # E``
+        model = TransformerModel_position(
             n_dims=conf.n_dims,
             n_positions=conf.n_positions,
             n_embd=conf.n_embd,
             n_layer=conf.n_layer,
             n_head=conf.n_head,
+            masking=conf.masking
         )
-    elif conf.family == "gpt2_no_mask":
-        model = TransformerModel_no_mask(
+    elif conf.family == "gpt2_no_position": # mask - pos # E``
+        model = TransformerModel_no_position(
             n_dims=conf.n_dims,
             n_positions=conf.n_positions,
             n_embd=conf.n_embd,
             n_layer=conf.n_layer,
             n_head=conf.n_head,
+            masking=conf.masking
+        )
+    elif conf.family == "gpt2_no_position_fix1st": # mask - pos # E``
+        model = TransformerModel_no_position(
+            n_dims=conf.n_dims,
+            n_positions=conf.n_positions,
+            n_embd=conf.n_embd,
+            n_layer=conf.n_layer,
+            n_head=conf.n_head,
+            masking=conf.masking,
+            fix_layer1=True
         )
     else:
         raise NotImplementedError
 
     return model
 
-
 def get_relevant_baselines(task_name):
     task_to_baselines = {
         "linear_regression": [
             (LeastSquaresModel, {}),
+            (NNModel, {"n_neighbors": 1}),
             (NNModel, {"n_neighbors": 3}),
+            (AveragingModel, {}),
+        ],
+        "noisy_linear_regression": [
+            (LeastSquaresModel, {}),
+            (NNModel, {"n_neighbors": 1}),
+            (NNModel, {"n_neighbors": 3}),
+            (AveragingModel, {}),
+        ],
+        "quadratic_regression": [
+            (LeastSquaresModel, {}),
+            (QuadraticRegressionModel, {}),
+            (NNModel, {"n_neighbors": 1}),
+            (NNModel, {"n_neighbors": 3}),
+            (NNModel, {"n_neighbors": 5}),
             (AveragingModel, {}),
         ],
         "linear_classification": [
@@ -100,9 +127,166 @@ def get_relevant_baselines(task_name):
     models = [model_cls(**kwargs) for model_cls, kwargs in task_to_baselines[task_name]]
     return models
 
-class TransformerModel_base(nn.Module):
-    def __init__(self, n_dims, n_positions, n_embd=128, n_layer=12, n_head=4):
-        super(TransformerModel_base, self).__init__()
+
+
+class TransformerModel(nn.Module):
+    def __init__(self, n_dims, n_positions, n_embd=128, n_layer=12, n_head=4, n_ctx=1024):
+        super(TransformerModel, self).__init__()
+        configuration = GPT2Config(
+            n_positions=n_positions,
+            n_embd=n_embd,
+            n_layer=n_layer,
+            n_head=n_head,
+            resid_pdrop=0.0,
+            embd_pdrop=0.0,
+            attn_pdrop=0.0,
+            use_cache=False,
+            output_attentions=True
+        )
+        self.name = f"gpt2_embd={n_embd}_layer={n_layer}_head={n_head}"
+
+        self.n_positions = n_positions
+        self.n_dims = n_dims
+        self._read_in = nn.Linear(n_dims+1, n_embd)
+        self._backbone = GPT2Model(configuration)
+
+        # kick off position encoding
+        del self._backbone.wpe
+        self._backbone.wpe = lambda x: 0 
+
+        self._read_out = nn.Linear(n_embd, 1)
+
+    @staticmethod
+    def _combine(xs_b, ys_b):
+        """Interleaves the x's and the y's into a single sequence."""
+        bsize, points, dim = xs_b.shape
+        # ys_b_wide = torch.cat(
+        #     (
+        #         ys_b.view(bsize, points, 1),
+        #         torch.zeros(bsize, points, dim - 1, device=ys_b.device),
+        #     ),
+        #     axis=2,
+        # )
+        # zs = torch.stack((xs_b, ys_b_wide), dim=2)
+        # zs = zs.view(bsize, 2 * points, dim)
+        zs = torch.cat((xs_b, ys_b.view(bsize, points, 1)), dim=2)
+
+        zs_all = []
+
+        for i in range(points):
+            tmp = zs[:,:(i+1),:].clone()
+            tmp[:,i,-1] = 0
+            zs_all.append(tmp)
+
+        return zs_all
+
+    def forward(self, xs, ys, inds=None):
+        n = ys.shape[0]
+        d = ys.shape[1]
+        zs_all = self._combine(xs, ys)
+        prediction = torch.tensor([]).cuda()
+        if inds is None:
+            inds = torch.arange(ys.shape[1])
+        else:
+            inds = torch.tensor(inds)
+            if max(inds) >= ys.shape[1] or min(inds) < 0:
+                raise ValueError("inds contain indices where xs and ys are not defined")
+        for i in range(len(zs_all)):
+            zs = zs_all[i]
+            embeds = self._read_in(zs)
+            output = self._backbone(inputs_embeds=embeds) # no positional encoding
+            attentions = output.attentions
+            output = output.last_hidden_state
+            prediction = torch.cat((prediction,self._read_out(output)[:,-1,-1]))
+        # print(prediction.view((n,-1)).shape)
+        # print(prediction.shape)
+        # print((prediction.view((d,-1)).t())[:10,-1])
+        # print(ys[:10,-1])
+        return prediction.view((d,-1)).t()[:, inds], attentions  # predict only on xs
+
+
+class TransformerModel_no_encoding(nn.Module):
+    def __init__(self, n_dims, n_positions, n_embd=128, n_layer=12, n_head=4, n_ctx=1024,masking=True):
+        super(TransformerModel_no_encoding, self).__init__()
+        configuration = GPT2Config(
+            n_positions=n_positions,
+            n_embd=n_embd,
+            n_layer=n_layer,
+            n_head=n_head,
+            resid_pdrop=0.0,
+            embd_pdrop=0.0,
+            attn_pdrop=0.0,
+            use_cache=False,
+            output_attentions=True
+        )
+        self.name = f"gpt2_embd={n_embd}_layer={n_layer}_head={n_head}"
+
+        self.n_positions = n_positions
+        self.n_dims = n_dims
+        self._read_in = nn.Linear(n_dims+1, n_embd)
+        self._backbone = GPT2Model(configuration)
+        self.masking = masking
+        # Drop causal masking in attention modules
+        if not self.masking:
+            self._backbone.h = nn.ModuleList([BlockNoMask(configuration, scale=True) for _ in range(configuration.n_layer)])
+
+        # kick off position encoding
+        del self._backbone.wpe
+        self._backbone.wpe = lambda x: 0 
+
+        self._read_out = nn.Linear(n_embd, 1)
+
+    @staticmethod
+    def _combine(xs_b, ys_b):
+        """Interleaves the x's and the y's into a single sequence."""
+        bsize, points, dim = xs_b.shape
+        # ys_b_wide = torch.cat(
+        #     (
+        #         ys_b.view(bsize, points, 1),
+        #         torch.zeros(bsize, points, dim - 1, device=ys_b.device),
+        #     ),
+        #     axis=2,
+        # )
+        # zs = torch.stack((xs_b, ys_b_wide), dim=2)
+        # zs = zs.view(bsize, 2 * points, dim)
+        zs = torch.cat((xs_b, ys_b.view(bsize, points, 1)), dim=2)
+
+        zs_all = []
+
+        for i in range(points):
+            tmp = zs[:,:(i+1),:].clone()
+            tmp[:,i,-1] = 0
+            zs_all.append(tmp)
+
+        return zs_all
+
+    def forward(self, xs, ys, inds=None):
+        n = ys.shape[0]
+        d = ys.shape[1]
+        zs_all = self._combine(xs, ys)
+        prediction = torch.tensor([]).cuda()
+        if inds is None:
+            inds = torch.arange(ys.shape[1])
+        else:
+            inds = torch.tensor(inds)
+            if max(inds) >= ys.shape[1] or min(inds) < 0:
+                raise ValueError("inds contain indices where xs and ys are not defined")
+        for i in range(len(zs_all)):
+            zs = zs_all[i]
+            embeds = self._read_in(zs)
+            output = self._backbone(inputs_embeds=embeds) # no positional encoding
+            attentions = output.attentions
+            output = output.last_hidden_state
+            prediction = torch.cat((prediction,self._read_out(output)[:,-1,-1]))
+        # print(prediction.view((n,-1)).shape)
+        # print(prediction.shape)
+        # print((prediction.view((d,-1)).t())[:10,-1])
+        # print(ys[:10,-1])
+        return prediction.view((d,-1)).t()[:, inds], attentions  # predict only on xs
+
+class TransformerModel_position(nn.Module):
+    def __init__(self, n_dims, n_positions, n_embd=128, n_layer=12, n_head=4, n_ctx=1024,masking=True):
+        super(TransformerModel_position, self).__init__()
         configuration = GPT2Config(
             n_positions=2 * n_positions,
             n_embd=n_embd,
@@ -112,6 +296,7 @@ class TransformerModel_base(nn.Module):
             embd_pdrop=0.0,
             attn_pdrop=0.0,
             use_cache=False,
+            output_attentions=True
         )
         self.name = f"gpt2_embd={n_embd}_layer={n_layer}_head={n_head}"
 
@@ -120,6 +305,11 @@ class TransformerModel_base(nn.Module):
         self._read_in = nn.Linear(n_dims, n_embd)
         self._backbone = GPT2Model(configuration)
         self._read_out = nn.Linear(n_embd, 1)
+
+        self.masking = masking
+        # Drop causal masking in attention modules
+        if not self.masking:
+            self._backbone.h = nn.ModuleList([BlockNoMask(configuration, scale=True) for _ in range(configuration.n_layer)])
 
     @staticmethod
     def _combine(xs_b, ys_b):
@@ -144,47 +334,15 @@ class TransformerModel_base(nn.Module):
             if max(inds) >= ys.shape[1] or min(inds) < 0:
                 raise ValueError("inds contain indices where xs and ys are not defined")
         zs = self._combine(xs, ys)
-
-        # Let the model behave differently based on train/eval state()
-        if self.training():
-            embeds = self._read_in(zs)
-            output = self._backbone(inputs_embeds=embeds).last_hidden_state
-            prediction = self._read_out(output)
-            return prediction[:, ::2, 0][:, inds]  # predict only on xs
-        else:
-            zs_all = []
-            points = xs.shape[1]
-            for i in range(points):
-                tmp = zs[:,:2*(i+1),:].clone()
-                tmp[:,(2*i+1),-1] = 0 # Set the last y (y_query) to 0
-                zs_all.append(tmp)
-
-            prediction = torch.tensor([]).cuda()
-            d = ys.shape[1]
-            for i in range(len(zs_all)):
-                zs = zs_all[i]
-                embeds = self._read_in(zs)
-                output = self._backbone(inputs_embeds=embeds).last_hidden_state
-                predict = self._read_out(output)[:,-1,-1] # Predict only on the x_query
-                prediction = torch.cat((prediction,predict))
-            return prediction.view((d,-1)).t()[:, inds]  # predict only on xs
-
-
-class TransformerModel_no_pe(TransformerModel_base):
-    def __init__(self, n_dims, n_positions, n_embd=128, n_layer=12, n_head=4):
-        super(TransformerModel_no_pe, self).__init__(n_dims, n_positions, n_embd=n_embd, n_layer=n_layer, n_head=n_head)
-        del self._backbone.wpe
-        self._backbone.wpe = lambda x: 0
-
-class TransformerModel_no_mask(TransformerModel_base):
-    def __init__(self, n_dims, n_positions, n_embd=128, n_layer=12, n_head=4):
-        super(TransformerModel_no_mask, self).__init__(n_dims, n_positions, n_embd=n_embd, n_layer=n_layer, n_head=n_head)
-        for i in self._backbone.h:
-            i.attn.bias = (i.attn.bias*0+1) > 0
-
-class TransformerModel_new_pe(TransformerModel_base):
-    def __init__(self, n_dims, n_positions, n_embd=128, n_layer=12, n_head=4):
-        super(TransformerModel_new_pe, self).__init__(n_dims, n_positions, n_embd=n_embd, n_layer=n_layer, n_head=n_head)
+        embeds = self._read_in(zs)
+        output = self._backbone(inputs_embeds=embeds)
+        attentions = output.attentions
+        prediction = self._read_out(output.last_hidden_state)
+        return prediction[:, ::2, 0][:, inds], attentions  # predict only on xs
+    
+class TransformerModel_no_position(nn.Module):
+    def __init__(self, n_dims, n_positions, n_embd=128, n_layer=12, n_head=4, n_ctx=1024,masking=True,fix_layer1=False):
+        super(TransformerModel_no_position, self).__init__()
         configuration = GPT2Config(
             n_positions=2 * n_positions,
             n_embd=n_embd,
@@ -194,30 +352,59 @@ class TransformerModel_new_pe(TransformerModel_base):
             embd_pdrop=0.0,
             attn_pdrop=0.0,
             use_cache=False,
+            output_attentions=True
         )
+        self.name = f"gpt2_embd={n_embd}_layer={n_layer}_head={n_head}"
 
+        self.n_positions = n_positions
+        self.n_dims = n_dims
+        self._read_in = nn.Linear(n_dims, n_embd)
+        self._backbone = GPT2Model(configuration)
+        self._read_out = nn.Linear(n_embd, 1)
+        self.masking = masking
+        # Drop causal masking in attention modules
+        if not self.masking:
+            self._backbone.h = nn.ModuleList([BlockNoMask(configuration, scale=True) for _ in range(configuration.n_layer)])
+
+        # kick off position encoding
         del self._backbone.wpe
+        self._backbone.wpe = lambda x: 0 
 
-        self.pos = torch.zeros((configuration.max_position_embeddings, configuration.hidden_size))
-        n = configuration.max_position_embeddings
-        for i in range(int(n/4)):
-            try:
-                self.pos[ i*4, i ] = 1
-                self.pos[ i*4+1, i ] = 1
-                self.pos[ i*4+2, i ] = -1
-                self.pos[ i*4+3, i ] = -1
-            except:
-                break
-        self.pos = self.pos
-        self.pos.cuda()
-        self.pos_ = torch.autograd.Variable(torch.tensor([1.]))
+        # Fix the first layer
+        if fix_layer1:
+            for i, block in enumerate(self._backbone.h):
+                if i == 0:
+                    for param in block.parameters():
+                        param.requires_grad = False
 
-        self._backbone.wpe = lambda x: self.pos[x.cpu()].cuda()*self.pos_.cuda()
+    @staticmethod
+    def _combine(xs_b, ys_b):
+        """Interleaves the x's and the y's into a single sequence."""
+        bsize, points, dim = xs_b.shape
+        ys_b_wide = torch.cat(
+            (
+                ys_b.view(bsize, points, 1),
+                torch.zeros(bsize, points, dim - 1, device=ys_b.device),
+            ),
+            axis=2,
+        )
+        zs = torch.stack((xs_b, ys_b_wide), dim=2)
+        zs = zs.view(bsize, 2 * points, dim)
+        return zs
 
-
-class TransformerModel_pe(TransformerModel_base):
-    def __init__(self, n_dims, n_positions, n_embd=128, n_layer=12, n_head=4):
-        super(TransformerModel_pe, self).__init__(n_dims, n_positions, n_embd=n_embd, n_layer=n_layer, n_head=n_head)
+    def forward(self, xs, ys, inds=None):
+        if inds is None:
+            inds = torch.arange(ys.shape[1])
+        else:
+            inds = torch.tensor(inds)
+            if max(inds) >= ys.shape[1] or min(inds) < 0:
+                raise ValueError("inds contain indices where xs and ys are not defined")
+        zs = self._combine(xs, ys)
+        embeds = self._read_in(zs)
+        output = self._backbone(inputs_embeds=embeds)
+        attentions = output.attentions
+        prediction = self._read_out(output.last_hidden_state)
+        return prediction[:, ::2, 0][:, inds], attentions  # predict only on xs
 
 
 
@@ -296,6 +483,36 @@ class LeastSquaresModel:
 
         return torch.stack(preds, dim=1)
 
+class QuadraticRegressionModel:
+    def __init__(self, driver=None):
+        self.driver = driver
+        self.name = f"Quadratic_driver={driver}"
+
+    def __call__(self, xs, ys, inds=None):
+        xs, ys = xs.cpu(), ys.cpu()
+        if inds is None:
+            inds = range(ys.shape[1])
+        else:
+            if max(inds) >= ys.shape[1] or min(inds) < 0:
+                raise ValueError("inds contain indices where xs and ys are not defined")
+
+        preds = []
+
+        for i in inds:
+            if i == 0:
+                preds.append(torch.zeros_like(ys[:, 0]))  # predict zero for first point
+                continue
+            train_xs, train_ys = xs[:, :i], ys[:, :i]
+            test_x = xs[:, i : i + 1]
+
+            ws, _, _, _ = torch.linalg.lstsq(
+                train_xs, train_ys.unsqueeze(2), driver=self.driver
+            )
+
+            pred = (test_x) @ ws
+            preds.append(pred[:, 0, 0])
+
+        return torch.stack(preds, dim=1)
 
 class AveragingModel:
     def __init__(self):
@@ -569,3 +786,4 @@ class XGBoostModel:
             preds.append(pred)
 
         return torch.stack(preds, dim=1)
+

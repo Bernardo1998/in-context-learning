@@ -8,3 +8,5 @@
 /bin/hostname
 
 python train.py --config conf/linear_regression.yaml
+
+python train.py --config conf/linear_regression.yaml

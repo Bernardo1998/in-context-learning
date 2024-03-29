@@ -1,16 +1,16 @@
 inherit: 
-    - models/tiny.yaml
+    - models/standard.yaml
     - wandb.yaml
 
 model:
     n_dims: 5
-    n_positions: 11
+    n_positions: 300
 
 training:
     task: linear_regression
     data: gaussian
     task_kwargs: {}
-    batch_size: 256
+    batch_size: 64
     learning_rate: 0.0001
     save_every_steps: 1000
     keep_every_steps: 100000
@@ -22,12 +22,12 @@ training:
             inc: 1
             interval: 2000
         points:
-            start: 11
-            end: 11
+            start: 30
+            end: 30
             inc: 2
             interval: 2000
 
-out_dir: ../models/linear_regression
+out_dir: /mnt/scratch/xingyue1/icl/
 
 wandb:
     name: "linear_regression_toy"

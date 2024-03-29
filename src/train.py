@@ -13,7 +13,7 @@ from samplers import get_data_sampler
 from curriculum import Curriculum
 from schema import schema
 from models import build_model
-import numpy as np
+
 import wandb
 
 torch.backends.cudnn.benchmark = True
@@ -21,17 +21,11 @@ torch.backends.cudnn.benchmark = True
 
 def train_step(model, xs, ys, optimizer, loss_func):
     optimizer.zero_grad()
-    output, attn = model(xs, ys)
-    # print(output[:10,-1])
-    # print(ys[:10,-1])
-    # print(output.shape)
-    # loss = loss_func(output[:,-1], ys[:,-1])
+    output = model(xs, ys)
     loss = loss_func(output, ys)
-    loss = loss.sum()
     loss.backward()
     optimizer.step()
-    # output = np.array([i.detach().cpu().numpy() for i in output])
-    return loss.detach().item(), output, attn
+    return loss.detach().item(), output.detach()
 
 
 def sample_seeds(total_seeds, count):
@@ -41,20 +35,7 @@ def sample_seeds(total_seeds, count):
     return seeds
 
 
-def train(model, model0, args):
-
-    '''
-        a = True
-    for i in model._backbone.h:
-        if a:
-            a = False
-        else:
-            del i.attn.c_attn
-            i.attn.c_attn = lambda x: x
-            for param in i.parameters():
-                param.requires_grad = False
-    '''
-
+def train(model, args):
     optimizer = torch.optim.Adam(model.parameters(), lr=args.training.learning_rate)
     curriculum = Curriculum(args.training.curriculum)
 
@@ -105,12 +86,11 @@ def train(model, model0, args):
 
         loss_func = task.get_training_metric()
 
-        loss, output, attn = train_step(model, xs.cuda(), ys.cuda(), optimizer, loss_func)
-        
+        loss, output = train_step(model, xs.cuda(), ys.cuda(), optimizer, loss_func)
 
         point_wise_tags = list(range(curriculum.n_points))
         point_wise_loss_func = task.get_metric()
-        point_wise_loss = point_wise_loss_func(output, ys.cuda()).mean(axis=0)
+        point_wise_loss = point_wise_loss_func(output, ys.cuda()).mean(dim=0)
 
         baseline_loss = (
             sum(
@@ -121,31 +101,23 @@ def train(model, model0, args):
         )
 
         if i % args.wandb.log_every_steps == 0 and not args.test_run:
-            diff = 0
-            norm = 0
-            for v1, v2 in zip(model.parameters(),model0.parameters()):
-                diff += torch.sum( (v1-v2)**2 )
-                norm += torch.sum(v2**2)
-
             wandb.log(
                 {
                     "overall_loss": loss,
                     "excess_loss": loss / baseline_loss,
                     "pointwise/loss": dict(
-                        zip(point_wise_tags, point_wise_loss)
+                        zip(point_wise_tags, point_wise_loss.cpu().numpy())
                     ),
                     "n_points": curriculum.n_points,
                     "n_dims": curriculum.n_dims_truncated,
-                    "diff": diff,
-                    "prop_diff": diff/norm,
                 },
                 step=i,
             )
-        # print(diff/norm)
+
         curriculum.update()
 
         pbar.set_description(f"loss {loss}")
-        if (i % args.training.save_every_steps == 0 and not args.test_run) or (i==args.training.train_steps-1):
+        if i % args.training.save_every_steps == 0 and not args.test_run:
             training_state = {
                 "model_state_dict": model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
@@ -160,10 +132,6 @@ def train(model, model0, args):
             and i > 0
         ):
             torch.save(model.state_dict(), os.path.join(args.out_dir, f"model_{i}.pt"))
-            torch.save(attn, os.path.join(args.out_dir, "attn.pt"))
-    
-        del attn
-    # torch.save(model.state_dict(), os.path.join(args.out_dir, f"model.pt"))
 
 
 def main(args):
@@ -185,15 +153,11 @@ def main(args):
 
     model = build_model(args.model)
     model.cuda()
-    model0 = build_model(args.model)
-    model0.cuda()
-    model0.load_state_dict(model.state_dict())
-
     model.train()
-    train(model, model0, args)
+
+    train(model, args)
 
     if not args.test_run:
-
         _ = get_run_metrics(args.out_dir)  # precompute metrics for eval
 
 
